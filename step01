@@ -1,0 +1,96 @@
+ai指令：对 bank_customers.csv 选取 balance, avg_monthly_spend, product_count, overdue_count四列标准化后做 KMeans(k=4)，把簇编号写回 df 新列 cluster，输出各簇人数。
+
+
+
+# -*- coding: utf-8 -*-
+"""
+Step 1 — KMeans 聚类跑通
+tag: O9-step1
+
+流程：
+  1) 准备 bank_customers.csv（若不存在则生成模拟数据）
+  2) 选取 balance, avg_monthly_spend, product_count, overdue_count 四列
+  3) StandardScaler 标准化
+  4) KMeans(n_clusters=4, random_state=42)
+  5) 簇编号写回 df 新列 cluster
+  6) 输出各簇人数 & 简要质量指标
+"""
+
+import os
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+
+# ========== 路径 ==========
+BASE_DIR = r"c:\Users\Lucile\Desktop\111"
+CSV_PATH = os.path.join(BASE_DIR, "bank_customers.csv")
+
+# ========== 1) 数据准备 ==========
+if not os.path.exists(CSV_PATH):
+    print(f"[提示] 未找到 {CSV_PATH}，生成模拟银行客户数据...")
+    rng = np.random.default_rng(42)
+    n = 2000
+    df = pd.DataFrame({
+        "customer_id": np.arange(1, n + 1),
+        "balance":            rng.normal(15000, 8000, n).clip(500),
+        "avg_monthly_spend":  rng.normal(3000, 1500, n).clip(100),
+        "product_count":      rng.integers(1, 8, n),
+        "overdue_count":      rng.choice([0, 0, 0, 1, 1, 2, 3], n),
+        "age":                rng.integers(18, 80, n),
+        "income":             rng.normal(12000, 6000, n).clip(1000),
+    })
+    df.to_csv(CSV_PATH, index=False)
+    print(f"[完成] 模拟数据已保存 -> {CSV_PATH}  ({len(df)} 行)")
+
+# 读取
+df = pd.read_csv(CSV_PATH)
+print(f"\n数据加载: {df.shape[0]} 行 x {df.shape[1]} 列")
+print(df.head(3).to_string())
+
+# ========== 2) 选特征 ==========
+FEATURE_COLS = ["balance", "avg_monthly_spend", "product_count", "overdue_count"]
+X_raw = df[FEATURE_COLS].copy()
+
+# 缺失值兜底
+X_raw = X_raw.fillna(X_raw.median(numeric_only=True))
+
+print(f"\n特征列: {FEATURE_COLS}")
+print("各列描述统计:")
+print(X_raw.describe().round(2).to_string())
+
+# ========== 3) 标准化 ==========
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_raw)
+
+# ========== 4) KMeans 聚类 ==========
+kmeans = KMeans(n_clusters=4, random_state=42, n_init=10)
+cluster_labels = kmeans.fit_predict(X_scaled)
+
+# ========== 5) 写回 df ==========
+df["cluster"] = cluster_labels
+
+# ========== 6) 输出各簇人数 ==========
+print("\n========== 各簇人数 ==========")
+cluster_counts = df["cluster"].value_counts().sort_index()
+for cid, cnt in cluster_counts.items():
+    pct = cnt / len(df) * 100
+    print(f"  簇 {cid}: {cnt:5d} 人  ({pct:5.1f}%)")
+
+# ========== 附加：质量指标 ==========
+n_unique = len(np.unique(cluster_labels))
+if 1 < n_unique < len(df):
+    sil = silhouette_score(X_scaled, cluster_labels)
+    print(f"\n轮廓系数 silhouette_score = {sil:.4f}  (越接近 1 越好)")
+print(f"簇内平方和 inertia = {kmeans.inertia_:.2f}")
+
+# 簇中心（原尺度）
+print("\n========== 各簇中心（原尺度均值）==========")
+centers_original = scaler.inverse_transform(kmeans.cluster_centers_)
+center_df = pd.DataFrame(centers_original, columns=FEATURE_COLS)
+center_df.index = [f"簇{c}" for c in range(4)]
+center_df["人数"] = cluster_counts.values
+print(center_df.round(2).to_string())
+
+print("\nStep 1 聚类跑通")
