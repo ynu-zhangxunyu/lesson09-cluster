@@ -1,0 +1,156 @@
+ai指令：k=1..9 逐个跑，画”SSE 随 k 变化”折线，标注你选的肘点。 检查点 2：折线图入库；能一句话论证”我选 k=X 因为……“。
+
+
+
+
+# -*- coding: utf-8 -*-
+"""
+Step 2 — 肘部法则选 k
+tag: O9-step2
+
+任务：
+  1) k=1..9 逐个跑 KMeans，记录 SSE(inertia_)
+  2) 计算 k=2..9 的轮廓系数作为辅助
+  3) 画 SSE-k 折线图 + 自动标注肘点（弦距法）
+  4) 图保存为 elbow.png
+  5) 一句话论证 "我选 k=X 因为……"
+"""
+
+import os
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")   # 非交互后端，避免阻塞
+import matplotlib.pyplot as plt
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+
+# ========== 路径 ==========
+BASE_DIR = r"c:\Users\Lucile\Desktop\111"
+CSV_PATH = os.path.join(BASE_DIR, "bank_customers.csv")
+FIG_PATH = os.path.join(BASE_DIR, "elbow.png")
+
+# ========== 1) 读数据 & 标准化（与 step01 一致）==========
+FEATURE_COLS = ["balance", "avg_monthly_spend", "product_count", "overdue_count"]
+
+df = pd.read_csv(CSV_PATH)
+X_raw = df[FEATURE_COLS].copy().fillna(df[FEATURE_COLS].median(numeric_only=True))
+
+scaler = StandardScaler()
+X = scaler.fit_transform(X_raw)
+
+# ========== 2) k=1..9 跑 KMeans，收集 SSE ==========
+K_RANGE = range(1, 10)
+sse_list = []
+sil_list = []
+
+for k in K_RANGE:
+    km = KMeans(n_clusters=k, random_state=42, n_init=10)
+    labels = km.fit_predict(X)
+    sse_list.append(km.inertia_)
+
+    if k >= 2:
+        sil = silhouette_score(X, labels)
+        sil_list.append(sil)
+    else:
+        sil_list.append(np.nan)
+
+sse_arr = np.array(sse_list)
+k_arr   = np.array(list(K_RANGE))
+
+# ========== 3) 自动找肘点（弦距法）==========
+
+# 思路：SSE 曲线上点到首尾连线的垂直距离最大的点 = 肘点。
+
+# 取 k>=2 参与候选，避免 k=1→2 降幅过大误判。
+def find_elbow(k_vals, sse_vals, k_min=2):
+    """弦距法检测肘点，返回 k 值。"""
+    mask = k_vals >= k_min
+    k_sub = k_vals[mask]
+    sse_sub = sse_vals[mask]
+
+    p_start = np.array([k_sub[0], sse_sub[0]])
+    p_end   = np.array([k_sub[-1], sse_sub[-1]])
+    seg_vec = p_end - p_start
+    seg_len_sq = np.dot(seg_vec, seg_vec)
+
+    dists = []
+    for pt in np.column_stack([k_sub, sse_sub]):
+        # 点到直线距离: |(pt - start) x seg| / |seg|
+        cross = (pt[0] - p_start[0]) * seg_vec[1] - (pt[1] - p_start[1]) * seg_vec[0]
+        dists.append(abs(cross) / np.sqrt(seg_len_sq))
+
+    best_idx = int(np.argmax(dists))
+    return int(k_sub[best_idx])
+
+elbow_k = find_elbow(k_arr, sse_arr, k_min=2)
+
+# 轮廓系数最优 k
+sil_arr = np.array(sil_list)
+sil_best_k = int(k_arr[np.nanargmax(sil_arr)])
+
+print("========== k=1..9 指标 ==========")
+print(f"{'k':>3}  {'SSE':>10}  {'silhouette':>12}")
+for i, k in enumerate(k_arr):
+    sil_str = f"{sil_arr[i]:.4f}" if not np.isnan(sil_arr[i]) else "     -"
+    print(f"{k:>3}  {sse_arr[i]:>10.2f}  {sil_str:>12}")
+
+print(f"\n[弦距法] 肘点 k = {elbow_k}")
+print(f"[轮廓系数] 最优 k = {sil_best_k}  (silhouette={sil_arr[sil_best_k-1]:.4f})")
+
+# ========== 4) 画图（SSE 折线 + 肘点标注 + 轮廓系数副轴）==========
+fig, ax1 = plt.subplots(figsize=(8, 5))
+
+# --- 左轴: SSE ---
+ax1.plot(k_arr, sse_arr, marker="o", linewidth=2, markersize=8,
+         color="#1f77b4", label="SSE (簇内平方和)")
+ax1.set_xlabel("k (簇数)", fontsize=12)
+ax1.set_ylabel("SSE", fontsize=12, color="#1f77b4")
+ax1.tick_params(axis="y", labelcolor="#1f77b4")
+ax1.set_xticks(k_arr)
+ax1.grid(True, alpha=0.3)
+
+# --- 肘点高亮 ---
+ax1.scatter([elbow_k], [sse_arr[elbow_k - 1]],
+            s=220, facecolors="none", edgecolors="red", linewidths=2.5,
+            zorder=5, label=f"肘点 k={elbow_k}")
+ax1.annotate(f"k={elbow_k}",
+             xy=(elbow_k, sse_arr[elbow_k - 1]),
+             xytext=(elbow_k + 0.6, sse_arr[elbow_k - 1] + 100),
+             arrowprops=dict(arrowstyle="->", color="red"),
+             fontsize=11, color="red", fontweight="bold")
+
+# --- 右轴: 轮廓系数 ---
+ax2 = ax1.twinx()
+ax2.plot(k_arr, sil_arr, marker="s", linewidth=1.8, markersize=6,
+         color="#ff7f0e", linestyle="--", label="轮廓系数")
+ax2.set_ylabel("silhouette_score", fontsize=12, color="#ff7f0e")
+ax2.tick_params(axis="y", labelcolor="#ff7f0e")
+ax2.set_ylim(bottom=0)
+
+# --- 合并图例 ---
+h1, l1 = ax1.get_legend_handles_labels()
+h2, l2 = ax2.get_legend_handles_labels()
+ax1.legend(h1 + h2, l1 + l2, loc="upper right", fontsize=10)
+
+plt.title("肘部法则 + 轮廓系数 (k=1..9)", fontsize=13)
+fig.tight_layout()
+plt.savefig(FIG_PATH, dpi=150)
+print(f"\n[完成] 折线图已保存 -> {FIG_PATH}")
+
+# ========== 5) 一句话论证 ==========
+if elbow_k == sil_best_k:
+    chosen_k = elbow_k
+    reason = f"肘部法与轮廓系数均指向 k={chosen_k}，意见一致"
+else:
+    chosen_k = elbow_k
+    reason = (f"肘部法推荐 k={elbow_k}（SSE 拐点清晰），"
+              f"轮廓系数峰值在 k={sil_best_k}，"
+              f"两者接近；考虑业务上簇不宜过多，选 k={chosen_k}")
+
+print(f"\n========== 决策 ==========")
+print(f"我选 k = {chosen_k}  因为：{reason}")
+
+print("\nStep 2 肘部法则完成")
